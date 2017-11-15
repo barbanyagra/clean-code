@@ -52,7 +52,7 @@ namespace Markdown
 
 			private bool NextIsBold()
 			{
-				return false;
+				return false; // TODO
 			}
 
 			private Token NextAsBold(bool isOpen)
@@ -63,7 +63,7 @@ namespace Markdown
 
 			private bool NextIsItalic()
 			{
-				return false;
+				return false; // TODO
 			}
 			
 			private Token NextAsItalic(bool isOpen)
