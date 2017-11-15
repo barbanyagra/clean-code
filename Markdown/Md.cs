@@ -9,82 +9,109 @@ namespace Markdown
 	{
 		private class TokenParser
 		{
-			private const char EndOfInput = '\0';
+			private const char OutOfInputChar = '\0';
+			private const string BoldString = "__";
+			private const string ItalicString = "_";
 
 			private readonly string markdown;
 			private int position;
-			private IEnumerable<Token> tokens;
+			private readonly List<Token> tokens;
 
+			private int lastOpenBoldIndex = -1;
+			private int lastOpenItalicIndex = -1;
+			private char lastChar = OutOfInputChar;
+			
 			public TokenParser(string markdown)
 			{
 				this.markdown = markdown;
 				position = 0;
+				tokens = new List<Token>();
+				ParseTokens();
 			}
 
-			public IEnumerable<Token> GetTokens()
+			private void ParseTokens()
 			{
-				if (tokens != null) return tokens;
-				
-				var result = new List<Token>();
-				bool hasOpenBold = false;
-				bool hasOpenItalic = false;
-
-				while (PeekChar() != EndOfInput)
+				while (PeekChar() != OutOfInputChar)
 				{
-					if (NextIsBold())
-					{
-						result.Add(NextAsBold(!hasOpenBold));
-						hasOpenBold ^= true;
-					} 
-					else if (NextIsItalic())
-					{
-						result.Add(NextAsItalic(!hasOpenItalic));
-						hasOpenItalic ^= true;
-					}
+					if (NextIs(BoldString) && BoldCanOpen())
+						ParseNextAsBold(isOpen: true);
+					else if (NextIs(BoldString) && BoldCanClose())
+						ParseNextAsBold(isOpen: false);
+					else if (NextIs(ItalicString) && ItalicCanOpen())
+						ParseNextAsItalic(isOpen: true);
+					else if (NextIs(ItalicString) && ItalicCanClose())
+						ParseNextAsItalic(isOpen: false);
 					else
 					{
-						NextAsText();
+						if (NextIsEscapedUnderScope()) PollChar();
+						ParseNextCharAsText();
 					}
 				}
-
-				return tokens = result;
+				ChangeUnclosedTokensToText();
 			}
 
-			private bool NextIsBold()
+			// TODO
+			private bool BoldCanOpen() => !IsItalicOpened() && false;
+			private bool BoldCanClose() => !IsItalicOpened() && false;
+			private bool ItalicCanOpen() => false;
+			private bool ItalicCanClose() => false;
+			
+			private void ChangeUnclosedTokensToText()
 			{
-				return false; // TODO
-			}
+				if (IsItalicOpened())
+					tokens[lastOpenItalicIndex] = new Token(TokenType.Text, tokens[lastOpenItalicIndex].Text);
 
-			private Token NextAsBold(bool isOpen)
-			{
-				position += 2;
-				return new Token(isOpen ? TokenType.BoldOpen : TokenType.BoldClose, "__");
-			}
-
-			private bool NextIsItalic()
-			{
-				return false; // TODO
+				if (IsBoldOpened())
+					tokens[lastOpenBoldIndex] = new Token(TokenType.Text, tokens[lastOpenBoldIndex].Text);
 			}
 			
-			private Token NextAsItalic(bool isOpen)
+			public IEnumerable<Token> GetTokens() => tokens;
+
+			private bool IsBoldOpened() => lastOpenBoldIndex != -1;
+			private bool IsItalicOpened() => lastOpenItalicIndex != -1;
+
+			private bool NextIs(string s) => !s.Where((t, i) => t != PeekChar(i)).Any();
+			private bool NextIsEscapedUnderScope() => NextIs("\\_");
+			
+			private void ParseNextAsBold(bool isOpen)
 			{
-				position += 1;
-				return new Token(isOpen ? TokenType.ItalicOpen : TokenType.ItalicClose, "_");
+				var type = isOpen ? TokenType.BoldOpen : TokenType.BoldClose;
+				tokens.Add(new Token(type, PollString(BoldString)));
+				lastOpenBoldIndex = isOpen ? tokens.Count - 1 : -1;
+			}
+
+			private void ParseNextAsItalic(bool isOpen)
+			{
+				var type = isOpen ? TokenType.ItalicOpen : TokenType.ItalicClose;
+				tokens.Add(new Token(type, PollString(ItalicString)));
+				lastOpenItalicIndex = isOpen ? tokens.Count - 1 : -1;
 			}
 			
-			private Token NextAsText()
+			private void ParseNextCharAsText()
 			{
-				return new Token(TokenType.Text, PollChar().ToString());
+				tokens.Add(new Token(TokenType.Text, PollChar().ToString()));
 			}
 
 			private char PollChar()
 			{
-				return position < markdown.Length ? markdown[position++] : EndOfInput;
+				return lastChar = (position < markdown.Length ? markdown[position++] : OutOfInputChar);
 			}
 
-			private char PeekChar()
+			private string PollString(string s)
 			{
-				return position < markdown.Length ? markdown[position] : EndOfInput;
+				foreach (var ch in s)
+					if (PollChar() != ch)
+						throw new Exception("expected: " + ch + ", got: " + 
+						                    (lastChar != OutOfInputChar ? lastChar.ToString() : "OutOfInput"));
+				return s;
+			}
+
+			private char PeekChar(int offset = 0)
+			{
+				var index = position + offset;
+				return 0 <= index && index < markdown.Length 
+					? markdown[index]
+					: OutOfInputChar;
 			}
 		}
 
