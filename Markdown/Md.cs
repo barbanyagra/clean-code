@@ -1,155 +1,27 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
+using FluentAssertions;
 using NUnit.Framework;
 
 namespace Markdown
 {
 	public class Md
 	{
-		private class TokenParser
-		{
-			private const char OutOfInputChar = '\0';
-			private const string BoldString = "__";
-			private const string ItalicString = "_";
-
-			private readonly string markdown;
-			private int position;
-			private readonly List<Token> tokens;
-
-			private int lastOpenBoldIndex = -1;
-			private int lastOpenItalicIndex = -1;
-			private char lastChar = OutOfInputChar;
-			
-			public TokenParser(string markdown)
-			{
-				this.markdown = markdown;
-				position = 0;
-				tokens = new List<Token>();
-				ParseTokens();
-			}
-
-			private void ParseTokens()
-			{
-				while (PeekChar() != OutOfInputChar)
-				{
-					if (NextIs(BoldString) && BoldCanOpen())
-						ParseNextAsBold(isOpen: true);
-					else if (NextIs(BoldString) && BoldCanClose())
-						ParseNextAsBold(isOpen: false);
-					else if (NextIs(ItalicString) && ItalicCanOpen())
-						ParseNextAsItalic(isOpen: true);
-					else if (NextIs(ItalicString) && ItalicCanClose())
-						ParseNextAsItalic(isOpen: false);
-					else
-					{
-						if (NextIsEscapedUnderScope()) PollChar();
-						ParseNextCharAsText();
-					}
-				}
-				ChangeUnclosedTokensToText();
-			}
-
-			// TODO
-			private bool BoldCanOpen() => !IsItalicOpened() && false;
-			private bool BoldCanClose() => !IsItalicOpened() && false;
-			private bool ItalicCanOpen() => false;
-			private bool ItalicCanClose() => false;
-			
-			private void ChangeUnclosedTokensToText()
-			{
-				if (IsItalicOpened())
-					tokens[lastOpenItalicIndex] = new Token(TokenType.Text, tokens[lastOpenItalicIndex].Text);
-
-				if (IsBoldOpened())
-					tokens[lastOpenBoldIndex] = new Token(TokenType.Text, tokens[lastOpenBoldIndex].Text);
-			}
-			
-			public IEnumerable<Token> GetTokens() => tokens;
-
-			private bool IsBoldOpened() => lastOpenBoldIndex != -1;
-			private bool IsItalicOpened() => lastOpenItalicIndex != -1;
-
-			private bool NextIs(string s) => !s.Where((t, i) => t != PeekChar(i)).Any();
-			private bool NextIsEscapedUnderScope() => NextIs("\\_");
-			
-			private void ParseNextAsBold(bool isOpen)
-			{
-				var type = isOpen ? TokenType.BoldOpen : TokenType.BoldClose;
-				tokens.Add(new Token(type, PollString(BoldString)));
-				lastOpenBoldIndex = isOpen ? tokens.Count - 1 : -1;
-			}
-
-			private void ParseNextAsItalic(bool isOpen)
-			{
-				var type = isOpen ? TokenType.ItalicOpen : TokenType.ItalicClose;
-				tokens.Add(new Token(type, PollString(ItalicString)));
-				lastOpenItalicIndex = isOpen ? tokens.Count - 1 : -1;
-			}
-			
-			private void ParseNextCharAsText()
-			{
-				tokens.Add(new Token(TokenType.Text, PollChar().ToString()));
-			}
-
-			private char PollChar()
-			{
-				return lastChar = (position < markdown.Length ? markdown[position++] : OutOfInputChar);
-			}
-
-			private string PollString(string s)
-			{
-				foreach (var ch in s)
-					if (PollChar() != ch)
-						throw new Exception("expected: " + ch + ", got: " + 
-						                    (lastChar != OutOfInputChar ? lastChar.ToString() : "OutOfInput"));
-				return s;
-			}
-
-			private char PeekChar(int offset = 0)
-			{
-				var index = position + offset;
-				return 0 <= index && index < markdown.Length 
-					? markdown[index]
-					: OutOfInputChar;
-			}
-		}
-
-		private class Token
-		{
-			public readonly TokenType Type;
-			public readonly string Text;
-
-			public Token(TokenType type, string text)
-			{
-				Type = type;
-				Text = text;
-			}
-		}
-
-		private enum TokenType
-		{
-			BoldOpen, BoldClose, ItalicOpen, ItalicClose, Text
-		}
-
-		private IEnumerable<Token> GetTokens(string markdown)
-			=> new TokenParser(markdown).GetTokens();
-
-		private string TokenToString(Token token)
+		private string GetHtmlFromToken(Token token)
 		{
 			switch (token.Type)
 			{
-				case TokenType.BoldOpen:
+				case Token.TokenType.BoldOpen:
 					return "<strong>";
-				case TokenType.BoldClose:
+				case Token.TokenType.BoldClose:
 					return "</strong>";
 
-				case TokenType.ItalicOpen:
+				case Token.TokenType.ItalicOpen:
 					return "<em>";
-				case TokenType.ItalicClose:
+				case Token.TokenType.ItalicClose:
 					return "</em>";
 
-				case TokenType.Text:
+				case Token.TokenType.Text:
 					return token.Text;
 			}
 			throw new ArgumentException("unknown token type: " + token.Type);
@@ -157,8 +29,8 @@ namespace Markdown
 		
 		public string RenderToHtml(string markdown)
 		{
-			var parts = GetTokens(markdown)
-				.Select(TokenToString);
+			var parts = TokenParser.GetTokens(markdown)
+				.Select(GetHtmlFromToken);
 			return string.Concat(parts);
 		}
 	}
@@ -166,5 +38,77 @@ namespace Markdown
 	[TestFixture]
 	public class Md_ShouldRender
 	{
+		private Md md;
+
+		[SetUp]
+		public void setUp()
+		{
+			md = new Md();
+		}
+		
+		[TestCase(
+			arg: "Текст _окруженный с двух сторон_  одинарными символами подчерка " +
+				 "должен помещаться в HTML-тег em вот так:",
+			ExpectedResult = "Текст <em>окруженный с двух сторон</em>  одинарными символами подчерка " +
+							 "должен помещаться в HTML-тег em вот так:",
+			TestName = "Correctly")]
+		[TestCase(
+			arg: "\\_Вот это\\_, не должно выделиться тегом \\<em\\>.",
+			ExpectedResult = "_Вот это_, не должно выделиться тегом \\<em\\>.",
+			TestName = "IgnoringEscapedUnderscopes")]
+		[TestCase(
+			arg: "Внутри __двойного выделения _одинарное_ тоже__ работает.",
+			ExpectedResult = "Внутри <strong>двойного выделения <em>одинарное</em> тоже</strong> работает.",
+			TestName = "InsideBold")]
+		[TestCase(
+			arg: "Подчерки, заканчивающие выделение, должны следовать за непробельным символом. Иначе эти _подчерки _не" +
+			     " считаются_ окончанием выделения и остаются просто символами подчерка.",
+			ExpectedResult = "Подчерки, заканчивающие выделение, должны следовать за непробельным символом. Иначе эти " +
+			                 "<em>подчерки _не считаются</em> окончанием выделения и остаются просто символами подчерка.",
+			TestName = "NotCloseWhenWhiteSpacesBefore")]
+		public string Italic(string markDown)
+		{
+			return md.RenderToHtml(markDown);
+		}
+		
+		[TestCase(
+			arg: "__Двумя символами__ — должен становиться жирным с помощью тега \\<strong\\>.",
+			ExpectedResult = "<strong>Двумя символами</strong> — должен становиться жирным с помощью тега \\<strong\\>.",
+			TestName = "Correctly")]
+		[TestCase(
+			arg: "Но не наоборот — внутри _одинарного __двойное__ не работает_",
+			ExpectedResult = "Но не наоборот — внутри <em>одинарного _</em>двойное<em></em> не работает_",
+			TestName = "NotInsideItalic")]
+		[TestCase(
+			arg: "__непарные _символы не считаются выделением.",
+			ExpectedResult = "__непарные _символы не считаются выделением.",
+			TestName = "NotWhenUnpaired")]
+		[TestCase(
+			arg: "За подчерками, начинающими выделение, должен следовать непробельный символ. Иначе эти_ подчерки_ " +
+			     "не считаются выделением и остаются просто символами подчерка.",
+			ExpectedResult = "За подчерками, начинающими выделение, должен следовать непробельный символ. Иначе эти_ " +
+			                 "подчерки_ не считаются выделением и остаются просто символами подчерка.",
+			TestName = "NotOpenWhenWhiteSpacesAfter")]
+		[TestCase(
+			arg: "Подчерки, заканчивающие выделение, должны следовать за непробельным символом. Иначе эти __подчерки __не" +
+			     " считаются__ окончанием выделения и остаются просто символами подчерка.",
+			ExpectedResult = "Подчерки, заканчивающие выделение, должны следовать за непробельным символом. Иначе эти " +
+			                 "<strong>подчерки <em></em>не считаются</strong> окончанием выделения и остаются просто символами подчерка.",
+			TestName = "NotCloseWhenWhiteSpacesBefore")]
+		[TestCase(
+			arg: "___Тройная земля делаем жирным курсивом в порядке <strong><em>___",
+			ExpectedResult = "<strong><em>Тройная земля делаем жирным курсивом в порядке <strong><em></em></strong>",
+			TestName = "InTripleUnderscope")]
+		public string Bold(string markDown)
+		{
+			return md.RenderToHtml(markDown);
+		}
+		
+		[Test]
+		public void _NotToI()
+		{
+			new Md().RenderToHtml("Текст _окруженный с двух сторон_  одинарными символами подчерка")
+				.Should().NotBe("Текст <i>окруженный с двух сторон</i>  одинарными символами подчерка");
+		}
 	}
 }
